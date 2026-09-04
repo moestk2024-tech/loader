@@ -1,21 +1,14 @@
 const CONFIG = {
-  // === EDIT REDIRECT DI SINI ===
   redirects: {
-    "gacorr1": "https://example.com/"
+    "gacorr1": "https://vpn.8naga.space/1slowin79",
+    "gacorr2": "https://vpn.8naga.space/2slowin79",
+    "gacorr3": "https://vpn.8naga.space/3slowin79",
+    "gacorr4": "https://vpn.8naga.space/4slowin79"
   },
 
-  // PoW difficulty. 14 = ringan. Naikkan jika perlu.
   difficulty: 14,
-
-  // Challenge berlaku 2 menit.
   challengeTtlSeconds: 120,
-
-  // Cookie valid 1 jam.
-  passTtlSeconds: 3600,
-
-  // Secret acak dibuat saat ZIP ini dibuat.
-  // Jika repo PUBLIC, sebaiknya pindahkan ke Cloudflare Secret env AMAROK_SECRET.
-  embeddedSecret: "ac64aeadd32ba707c39b5fb2a8fd53dc55521a01ccb6eaf60929961d408a97b0"
+  passTtlSeconds: 3600
 };
 
 const COOKIE = "__Host-amrk_pass_v1";
@@ -31,6 +24,11 @@ function randomHex(bytes = 16) {
   const a = new Uint8Array(bytes);
   crypto.getRandomValues(a);
   return [...a].map(x=>x.toString(16).padStart(2,"0")).join("");
+}
+
+async function getSecret(env) {
+  if (!env.AMAROK_SECRET) throw new Error("AMAROK_SECRET belum diset di Cloudflare");
+  return env.AMAROK_SECRET;
 }
 
 async function hmac(secret, data) {
@@ -84,10 +82,6 @@ function json(data, status=200, headers={}) {
   });
 }
 
-async function getSecret(env) {
-  return env.AMAROK_SECRET || CONFIG.embeddedSecret;
-}
-
 async function validPass(request, code, env) {
   const raw = getCookie(request, COOKIE);
   if (!raw) return false;
@@ -114,19 +108,25 @@ async function challenge(request, env) {
 
   const url = new URL(request.url);
   const code = url.searchParams.get("code") || "";
+
   if (!Object.prototype.hasOwnProperty.call(CONFIG.redirects, code)) {
     return json({error:"unknown code"},404,{"x-amrk-reason":"unknown-code"});
   }
 
-  const ts = Date.now();
-  const rand = randomHex(16);
-  const secret = await getSecret(env);
-  const body = code+"."+ts+"."+rand;
-  const sig = await hmac(secret, body);
-  return json({
-    challenge: body+"."+sig,
-    difficulty: CONFIG.difficulty
-  });
+  try {
+    const ts = Date.now();
+    const rand = randomHex(16);
+    const secret = await getSecret(env);
+    const body = code+"."+ts+"."+rand;
+    const sig = await hmac(secret, body);
+
+    return json({
+      challenge: body+"."+sig,
+      difficulty: CONFIG.difficulty
+    });
+  } catch (e) {
+    return json({error:String(e && e.message || e)},500,{"x-amrk-reason":"secret-error"});
+  }
 }
 
 async function issue(request, env) {
@@ -156,7 +156,10 @@ async function issue(request, env) {
   if (!Number.isFinite(ts) || Math.abs(Date.now()-ts) > CONFIG.challengeTtlSeconds*1000)
     return json({error:"challenge expired"},400,{"x-amrk-reason":"challenge-expired"});
 
-  const secret = await getSecret(env);
+  let secret;
+  try { secret = await getSecret(env); }
+  catch(e) { return json({error:String(e.message||e)},500,{"x-amrk-reason":"secret-error"}); }
+
   const expectedChallengeSig = await hmac(secret, cCode+"."+tsStr+"."+rand);
   if (sig !== expectedChallengeSig)
     return json({error:"challenge signature"},400,{"x-amrk-reason":"bad-signature"});
@@ -188,11 +191,22 @@ async function issue(request, env) {
 }
 
 async function gateHtml(request, env, code) {
-  const assetUrl = new URL("/index.html", request.url);
-  const res = await env.ASSETS.fetch(new Request(assetUrl, request));
-  if (!res.ok) return res;
+  // PENTING: jangan fetch /index.html.
+  // Cloudflare Pages canonicalize /index.html -> / dengan 308.
+  // Template .txt tidak terkena canonical redirect HTML.
+  const assetUrl = new URL("/gate-template.txt", request.url);
+  const res = await env.ASSETS.fetch(new Request(assetUrl, {
+    method: "GET",
+    headers: request.headers
+  }));
+
+  if (!res.ok) {
+    return new Response("Gate template missing", {status:500});
+  }
+
   let html = await res.text();
   html = html.replace(/__CODE__/g, code);
+
   return new Response(html, {
     status:200,
     headers:{
@@ -210,17 +224,10 @@ export default {
     if (url.pathname === "/amarok/gate/challenge") return challenge(request, env);
     if (url.pathname === "/amarok/gate/issue") return issue(request, env);
 
-    // static assets tetap dilayani normal
-    if (
-      url.pathname === "/jembot.js" ||
-      url.pathname === "/index.html" ||
-      url.pathname === "/favicon.ico" ||
-      url.pathname.startsWith("/assets/")
-    ) {
+    if (url.pathname === "/jembot.js" || url.pathname === "/gate-template.txt") {
       return env.ASSETS.fetch(request);
     }
 
-    // Root sengaja 404
     if (url.pathname === "/") {
       return new Response("404 Not Found", {
         status:404,
@@ -236,7 +243,6 @@ export default {
       });
     }
 
-    // JSON probe untuk tombol/manual client
     if (url.searchParams.get("_amrk_json") === "1") {
       if (await validPass(request, code, env)) {
         return json({destination:CONFIG.redirects[code]});
