@@ -1,9 +1,12 @@
 const CONFIG = {
+  // Satu shortcode, banyak destination.
   redirects: {
-    "gacorr1": "https://vpn.8naga.space/1slowin79",
-    "gacorr2": "https://vpn.8naga.space/2slowin79",
-    "gacorr3": "https://vpn.8naga.space/3slowin79",
-    "gacorr4": "https://vpn.8naga.space/4slowin79"
+    "gacor": [
+      "https://vpn.8naga.space/1slowin79",
+      "https://vpn.8naga.space/2slowin79",
+      "https://vpn.8naga.space/3slowin79",
+      "https://vpn.8naga.space/4slowin79"
+    ]
   },
 
   difficulty: 14,
@@ -82,10 +85,37 @@ function json(data, status=200, headers={}) {
   });
 }
 
+function destinationsFor(code) {
+  const v = CONFIG.redirects[code];
+  if (!Array.isArray(v)) return [];
+  return v.filter(x => typeof x === "string" && /^https?:\/\//i.test(x));
+}
+
+async function pickDestination(code, env) {
+  const destinations = destinationsFor(code);
+  if (!destinations.length) throw new Error("destination kosong");
+  if (!env.ROTATOR) throw new Error("Binding ROTATOR belum diset di Cloudflare Pages");
+
+  // Satu Durable Object per shortcode. Semua request /gacor menuju object
+  // global yang sama, sehingga pembagian tidak bergantung pada instance Pages.
+  const id = env.ROTATOR.idFromName("amarok:" + code);
+  const stub = env.ROTATOR.get(id);
+
+  const r = await stub.fetch("https://rotator.internal/pick", {
+    method: "POST",
+    headers: {"content-type":"application/json"},
+    body: JSON.stringify({code, destinations})
+  });
+
+  if (!r.ok) throw new Error("rotator HTTP " + r.status);
+  const data = await r.json();
+  if (!data || typeof data.destination !== "string") throw new Error("bad rotator response");
+  return data.destination;
+}
+
 async function validPass(request, code, env) {
   const raw = getCookie(request, COOKIE);
   if (!raw) return false;
-
   const parts = raw.split(".");
   if (parts.length !== 4) return false;
 
@@ -105,13 +135,11 @@ async function validPass(request, code, env) {
 
 async function challenge(request, env) {
   if (request.method !== "GET") return new Response("Method Not Allowed", {status:405});
-
   const url = new URL(request.url);
   const code = url.searchParams.get("code") || "";
 
-  if (!Object.prototype.hasOwnProperty.call(CONFIG.redirects, code)) {
+  if (!destinationsFor(code).length)
     return json({error:"unknown code"},404,{"x-amrk-reason":"unknown-code"});
-  }
 
   try {
     const ts = Date.now();
@@ -119,11 +147,7 @@ async function challenge(request, env) {
     const secret = await getSecret(env);
     const body = code+"."+ts+"."+rand;
     const sig = await hmac(secret, body);
-
-    return json({
-      challenge: body+"."+sig,
-      difficulty: CONFIG.difficulty
-    });
+    return json({challenge:body+"."+sig,difficulty:CONFIG.difficulty});
   } catch (e) {
     return json({error:String(e && e.message || e)},500,{"x-amrk-reason":"secret-error"});
   }
@@ -141,7 +165,7 @@ async function issue(request, env) {
   const nonce = Number(data.nonce);
   const ua = String(data.ua || "");
 
-  if (!Object.prototype.hasOwnProperty.call(CONFIG.redirects, code))
+  if (!destinationsFor(code).length)
     return json({error:"unknown code"},404,{"x-amrk-reason":"unknown-code"});
 
   const parts = challengeStr.split(".");
@@ -191,19 +215,9 @@ async function issue(request, env) {
 }
 
 async function gateHtml(request, env, code) {
-  // PENTING: jangan fetch /index.html.
-  // Cloudflare Pages canonicalize /index.html -> / dengan 308.
-  // Template .txt tidak terkena canonical redirect HTML.
   const assetUrl = new URL("/gate-template.txt", request.url);
-  const res = await env.ASSETS.fetch(new Request(assetUrl, {
-    method: "GET",
-    headers: request.headers
-  }));
-
-  if (!res.ok) {
-    return new Response("Gate template missing", {status:500});
-  }
-
+  const res = await env.ASSETS.fetch(new Request(assetUrl, {method:"GET",headers:request.headers}));
+  if (!res.ok) return new Response("Gate template missing", {status:500});
   let html = await res.text();
   html = html.replace(/__CODE__/g, code);
 
@@ -224,34 +238,33 @@ export default {
     if (url.pathname === "/amarok/gate/challenge") return challenge(request, env);
     if (url.pathname === "/amarok/gate/issue") return issue(request, env);
 
-    if (url.pathname === "/jembot.js" || url.pathname === "/gate-template.txt") {
+    if (url.pathname === "/jembot.js" || url.pathname === "/gate-template.txt")
       return env.ASSETS.fetch(request);
-    }
 
-    if (url.pathname === "/") {
-      return new Response("404 Not Found", {
-        status:404,
-        headers:{"content-type":"text/plain; charset=utf-8"}
-      });
-    }
+    if (url.pathname === "/")
+      return new Response("404 Not Found",{status:404,headers:{"content-type":"text/plain; charset=utf-8"}});
 
     const code = safeCode(url.pathname);
-    if (!code || !Object.prototype.hasOwnProperty.call(CONFIG.redirects, code)) {
-      return new Response("404 Not Found", {
-        status:404,
-        headers:{"content-type":"text/plain; charset=utf-8"}
-      });
-    }
+    if (!code || !destinationsFor(code).length)
+      return new Response("404 Not Found",{status:404,headers:{"content-type":"text/plain; charset=utf-8"}});
 
     if (url.searchParams.get("_amrk_json") === "1") {
-      if (await validPass(request, code, env)) {
-        return json({destination:CONFIG.redirects[code]});
-      }
-      return json({error:"not verified"},401,{"x-amrk-reason":"no-pass"});
+      if (!(await validPass(request, code, env)))
+        return json({error:"not verified"},401,{"x-amrk-reason":"no-pass"});
+
+      try { return json({destination:await pickDestination(code, env)}); }
+      catch(e) { return json({error:String(e.message||e)},503,{"x-amrk-reason":"rotator-error"}); }
     }
 
     if (await validPass(request, code, env)) {
-      return Response.redirect(CONFIG.redirects[code], 302);
+      try {
+        return Response.redirect(await pickDestination(code, env), 302);
+      } catch (e) {
+        return new Response("Rotator unavailable: "+String(e.message||e), {
+          status:503,
+          headers:{"content-type":"text/plain; charset=utf-8","cache-control":"no-store"}
+        });
+      }
     }
 
     return gateHtml(request, env, code);

@@ -31,7 +31,7 @@ p{margin:0;color:#6d8c82;font-size:12px}
     <button type="button" id="amrk-refresh" class="refresh">Tap untuk lanjut &rsaquo;</button>
     <noscript>JavaScript wajib aktif untuk melanjutkan.</noscript>
   </div>
-  <div class="brand">Protected by 🐺 <b>AMAROK</b></div>
+  <div class="brand">Protected by 🐺 <b>SEO TURUN GUNUNG</b></div>
 </div>
 <script src="/jembot.js"></script>
 </body>
