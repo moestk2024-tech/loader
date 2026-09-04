@@ -1,10 +1,7 @@
 const CONFIG = {
   // === EDIT REDIRECT DI SINI ===
   redirects: {
-    "gacorr1": "https://vpn.8naga.space/1slowin79",
-    "gacorr2": "https://vpn.8naga.space/2slowin79",
-    "gacorr3": "https://vpn.8naga.space/3slowin79",
-    "gacorr4": "https://vpn.8naga.space/4slowin79"
+    "gacorr1": "https://example.com/"
   },
 
   // PoW difficulty. 14 = ringan. Naikkan jika perlu.
