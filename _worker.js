@@ -10,7 +10,7 @@ const CONFIG = {
   },
 
   difficulty: 14,
-  challengeTtlSeconds: 120,
+  challengeTtlSeconds: 30,
   passTtlSeconds: 3600
 };
 
