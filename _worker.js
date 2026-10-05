@@ -2,10 +2,10 @@ const CONFIG = {
   // Satu shortcode, banyak destination.
   redirects: {
     "gacor": [
-      "https://vpn.8naga.space/1slowin79",
-      "https://vpn.8naga.space/2slowin79",
-      "https://vpn.8naga.space/3slowin79",
-      "https://vpn.8naga.space/4slowin79"
+      "https://swtop.store/register?ref=9RGJSSR00DNL",
+      "https://swtop.store/register?ref=9RGJSSR0000",
+      "https://swtop.store/register?ref=9RGJSSR00DNL",
+      "https://swtop.store/register?ref=9RGJSSR014F"
     ]
   },
 
